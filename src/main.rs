@@ -1,7 +1,7 @@
 #[actix_web::main]
 async fn main() {
     actix_web::HttpServer::new(|| actix_web::App::new().service(item))
-        .bind(("127.0.0.1", 8080))
+        .bind(("0.0.0.0", 8080))
         .unwrap()
         .run()
         .await
@@ -75,23 +75,20 @@ async fn item(_path: actix_web::web::Path<(String, String)>) -> impl actix_web::
     );
     queue.submit(std::iter::once(encoder.finish()));
 
-    let mut png = vec![];
+    let mut data = vec![];
+    let mut encoder = png::Encoder::new(&mut data, 128, 128);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
 
-    {
-        let mut encoder = png::Encoder::new(&mut png, 128, 128);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().unwrap();
+    let buffer_slice = buffer.slice(..);
+    buffer_slice.map_async(wgpu::MapMode::Read, |_| ());
+    device.poll(wgpu::Maintain::Wait);
 
-        let buffer_slice = buffer.slice(..);
-        buffer_slice.map_async(wgpu::MapMode::Read, |_| ());
-        device.poll(wgpu::Maintain::Wait);
-
-        let buffer_view = buffer_slice.get_mapped_range();
-        writer.write_image_data(&buffer_view).unwrap();
-    }
+    let buffer_view = buffer_slice.get_mapped_range();
+    writer.write_image_data(&buffer_view).unwrap();
 
     actix_web::HttpResponse::Ok()
         .content_type("image/png")
-        .body(png)
+        .body(data)
 }
