@@ -1,6 +1,9 @@
+mod item;
+
 #[actix_web::main]
 async fn main() {
-    actix_web::HttpServer::new(|| actix_web::App::new().service(item))
+    let renderer = actix_web::web::Data::new(Renderer::new().await);
+    actix_web::HttpServer::new(move || actix_web::App::new().app_data(renderer.clone()).service(item::get))
         .bind(("0.0.0.0", 8080))
         .unwrap()
         .run()
@@ -8,89 +11,65 @@ async fn main() {
         .unwrap();
 }
 
-#[actix_web::get("/item/{namespace}/{key}.png")]
-async fn item(_path: actix_web::web::Path<(String, String)>) -> impl actix_web::Responder {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
-        .await
-        .unwrap();
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default(), None)
-        .await
-        .unwrap();
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 4],
+}
 
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: 128,
-            height: 128,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: 128 * 128 * 4,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+struct Renderer {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    {
-        let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &texture_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.2,
-                        b: 0.3,
-                        a: 0.5,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
+    bind_group_layout: wgpu::BindGroupLayout,
+    pipeline_layout: wgpu::PipelineLayout,
+    shader: wgpu::ShaderModule,
+}
+
+impl Renderer {
+    async fn new() -> Self {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .unwrap();
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default(), None)
+            .await
+            .unwrap();
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(4 * 4 * 4),
+                    },
+                    count: None,
+                }
+            ],
         });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let shader = device.create_shader_module(wgpu::include_wgsl!("albedo.wgsl"));
+
+        Renderer {
+            instance,
+            adapter,
+            device,
+            queue,
+            shader,
+            bind_group_layout,
+            pipeline_layout,
+        }
     }
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::ImageCopyBuffer {
-            buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(128 * 4),
-                rows_per_image: None,
-            },
-        },
-        texture.size(),
-    );
-    queue.submit(std::iter::once(encoder.finish()));
-
-    let mut data = vec![];
-    {
-        let mut encoder = png::Encoder::new(&mut data, 128, 128);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().unwrap();
-
-        let buffer_slice = buffer.slice(..);
-        buffer_slice.map_async(wgpu::MapMode::Read, |_| ());
-        device.poll(wgpu::Maintain::Wait);
-
-        let buffer_view = buffer_slice.get_mapped_range();
-        writer.write_image_data(&buffer_view).unwrap();
-    }
-
-    actix_web::HttpResponse::Ok()
-        .content_type("image/png")
-        .body(data)
 }

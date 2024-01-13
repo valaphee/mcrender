@@ -20,6 +20,6 @@ FROM ubuntu:22.04
 COPY --from=rust-builder /usr/local/cargo/bin/mcrender /usr/local/bin/mcrender
 COPY --from=swiftshader-builder /swiftshader/build/Linux/libvulkan.so.1 /lib/x86_64-linux-gnu/
 
-CMD ["mcrender"]
+ENTRYPOINT mcrender
 
 EXPOSE 8080
