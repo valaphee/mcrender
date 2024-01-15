@@ -1,14 +1,71 @@
+use std::f32::consts::FRAC_PI_4;
+
 use wgpu::util::DeviceExt;
-use crate::Renderer;
+
+use crate::{Renderer, Vertex};
 
 #[derive(serde::Serialize, serde::Deserialize)]
-struct Nbt {
+struct Query {
     nbt: Option<String>,
 }
 
-#[actix_web::get("/item/{namespace}.{key}.png")]
-async fn get(renderer: actix_web::web::Data<Renderer>, _id: actix_web::web::Path<(String, String)>, _nbt: actix_web::web::Query<Nbt>) -> impl actix_web::Responder {
-    println!("Loading {} {} {:?}", _id.0, _id.1, _nbt.nbt);
+fn vertex(position: [i8; 3]) -> Vertex {
+    Vertex {
+        position: [
+            position[0] as f32,
+            position[1] as f32,
+            position[2] as f32,
+            1.0,
+        ],
+    }
+}
+
+#[actix_web::get("/item/{namespace}/{key}.png")]
+async fn get(
+    renderer: actix_web::web::Data<Renderer>,
+    _path: actix_web::web::Path<(String, String)>,
+    _query: actix_web::web::Query<Query>,
+) -> impl actix_web::Responder {
+    let vertices = &[
+        // top (0, 0, 1)
+        vertex([-1, -1, 1]),
+        vertex([1, -1, 1]),
+        vertex([1, 1, 1]),
+        vertex([-1, 1, 1]),
+        // bottom (0, 0, -1)
+        vertex([-1, 1, -1]),
+        vertex([1, 1, -1]),
+        vertex([1, -1, -1]),
+        vertex([-1, -1, -1]),
+        // right (1, 0, 0)
+        vertex([1, -1, -1]),
+        vertex([1, 1, -1]),
+        vertex([1, 1, 1]),
+        vertex([1, -1, 1]),
+        // left (-1, 0, 0)
+        vertex([-1, -1, 1]),
+        vertex([-1, 1, 1]),
+        vertex([-1, 1, -1]),
+        vertex([-1, -1, -1]),
+        // front (0, 1, 0)
+        vertex([1, 1, -1]),
+        vertex([-1, 1, -1]),
+        vertex([-1, 1, 1]),
+        vertex([1, 1, 1]),
+        // back (0, -1, 0)
+        vertex([1, -1, 1]),
+        vertex([-1, -1, 1]),
+        vertex([-1, -1, -1]),
+        vertex([1, -1, -1]),
+    ];
+    let indices: &[u16] = &[
+        0, 1, 2, 2, 3, 0, // top
+        4, 5, 6, 6, 7, 4, // bottom
+        8, 9, 10, 10, 11, 8, // right
+        12, 13, 14, 14, 15, 12, // left
+        16, 17, 18, 18, 19, 16, // front
+        20, 21, 22, 22, 23, 20, // back
+    ];
 
     let output_texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
         label: None,
@@ -32,44 +89,81 @@ async fn get(renderer: actix_web::web::Data<Renderer>, _id: actix_web::web::Path
         mapped_at_creation: false,
     });
 
-    let uniform_buffer = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None,
-        contents: &[0u8; 4 * 4 * 4],
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM
-    });
-    let bind_group = renderer.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &renderer.bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding()
-            }
-        ],
-    });
-    let pipeline = renderer.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: None,
-        layout: Some(&renderer.pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &renderer.shader,
-            entry_point: "vs_main",
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Back),
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: Default::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &renderer.shader,
-            entry_point: "fs_main",
-            targets: &[None],
-        }),
-        multiview: None,
-    });
+    let projection = glam::Mat4::perspective_rh(FRAC_PI_4, 1.0, 1.0, 10.0);
+    let view = glam::Mat4::look_at_rh(
+        glam::Vec3::new(1.5, -5.0, 3.0),
+        glam::Vec3::ZERO,
+        glam::Vec3::Z,
+    );
+    let projection_view = projection * view;
 
-    let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let uniform_buffer = renderer
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(projection_view.as_ref()),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+        });
+    let bind_group = renderer
+        .device
+        .create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &renderer.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+    let pipeline = renderer
+        .device
+        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&renderer.pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &renderer.shader,
+                entry_point: "vs_main",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 0,
+                        shader_location: 0,
+                    }],
+                }],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &renderer.shader,
+                entry_point: "fs_main",
+                targets: &[Some(output_texture.format().into())],
+            }),
+            multiview: None,
+        });
+
+    let vertex_buffer = renderer
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+    let index_buffer = renderer
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+    let mut encoder = renderer
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -81,9 +175,9 @@ async fn get(renderer: actix_web::web::Data<Renderer>, _id: actix_web::web::Path
         });
         render_pass.set_pipeline(&pipeline);
         render_pass.set_bind_group(0, &bind_group, &[]);
-        //render_pass.set_index_buffer();
-        //render_pass.set_vertex_buffer();
-        //render_pass.draw_indexed();
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
     }
     encoder.copy_texture_to_buffer(
         output_texture.as_image_copy(),

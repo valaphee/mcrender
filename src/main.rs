@@ -1,14 +1,19 @@
+mod advancement;
 mod item;
 
 #[actix_web::main]
 async fn main() {
     let renderer = actix_web::web::Data::new(Renderer::new().await);
-    actix_web::HttpServer::new(move || actix_web::App::new().app_data(renderer.clone()).service(item::get))
-        .bind(("0.0.0.0", 8080))
-        .unwrap()
-        .run()
-        .await
-        .unwrap();
+    actix_web::HttpServer::new(move || {
+        actix_web::App::new()
+            .app_data(renderer.clone())
+            .service(item::get)
+    })
+    .bind(("0.0.0.0", 8080))
+    .unwrap()
+    .run()
+    .await
+    .unwrap();
 }
 
 #[repr(C)]
@@ -42,18 +47,16 @@ impl Renderer {
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(4 * 4 * 4),
-                    },
-                    count: None,
-                }
-            ],
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(4 * 4 * 4),
+                },
+                count: None,
+            }],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
